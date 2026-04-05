@@ -1,0 +1,833 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Offline Queries — Kỹ thuật xử lý truy vấn ngoại tuyến</title>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,700;0,900;1,700&family=DM+Mono:ital,wght@0,300;0,400;0,500;1,400&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+:root {
+  --ink:    #1a1209;
+  --ink2:   #4a3f2f;
+  --ink3:   #8a7a65;
+  --paper:  #f7f3eb;
+  --paper2: #efe9db;
+  --paper3: #e5ddd0;
+  --amber:  #c8820a;
+  --amber2: #e6a020;
+  --red:    #c0392b;
+  --green:  #2d6a4f;
+  --blue:   #1a4971;
+  --purple: #6b2fa0;
+  --border: #d4c8b5;
+  --code-bg:#1e1a14;
+  --code-border: #3a3025;
+}
+
+* { margin:0; padding:0; box-sizing:border-box; }
+html { scroll-behavior: smooth; }
+
+body {
+  background: var(--paper);
+  color: var(--ink);
+  font-family: 'DM Sans', sans-serif;
+  line-height: 1.75;
+  overflow-x: hidden;
+}
+
+/* ── NOISE TEXTURE OVERLAY ── */
+body::before {
+  content:'';
+  position:fixed; inset:0;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.04'/%3E%3C/svg%3E");
+  pointer-events: none;
+  z-index: 9999;
+  opacity: 0.4;
+}
+
+/* ── NAV ── */
+nav {
+  position: fixed; top:0; left:0; right:0; z-index:500;
+  background: rgba(247,243,235,0.9);
+  backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0 2.5rem; height: 52px;
+}
+.nav-logo {
+  font-family: 'Playfair Display', serif;
+  font-size: 1rem; font-weight: 700;
+  color: var(--amber);
+  letter-spacing: 0.02em;
+}
+.nav-links { display:flex; gap:0.25rem; }
+.nav-links a {
+  font-size: 0.78rem; color: var(--ink3);
+  text-decoration: none; padding: 0.3rem 0.7rem;
+  border-radius: 3px; transition: all 0.2s;
+  font-family: 'DM Mono', monospace;
+}
+.nav-links a:hover { background: var(--paper2); color: var(--ink); }
+@media(max-width:600px){ .nav-links{display:none;} }
+
+/* ── HERO ── */
+.hero {
+  min-height: 100vh;
+  display: flex; flex-direction: column;
+  justify-content: center; align-items: flex-start;
+  padding: 7rem 2.5rem 5rem;
+  max-width: 1100px; margin: 0 auto;
+  position: relative;
+}
+.hero-rule {
+  width: 100%; height: 1px;
+  background: linear-gradient(90deg, var(--amber), transparent);
+  margin-bottom: 2rem;
+}
+.hero-eyebrow {
+  font-family: 'DM Mono', monospace;
+  font-size: 0.72rem; letter-spacing: 0.2em;
+  color: var(--amber); text-transform: uppercase;
+  margin-bottom: 1rem;
+  animation: fadeSlide 0.7s ease both;
+}
+.hero h1 {
+  font-family: 'Playfair Display', serif;
+  font-size: clamp(3rem, 8vw, 6.5rem);
+  font-weight: 900; line-height: 1.0;
+  color: var(--ink);
+  animation: fadeSlide 0.7s 0.1s ease both;
+}
+.hero h1 em {
+  font-style: italic;
+  color: var(--amber);
+}
+.hero-desc {
+  max-width: 620px;
+  margin-top: 1.75rem;
+  font-size: 1.05rem;
+  color: var(--ink2);
+  animation: fadeSlide 0.7s 0.2s ease both;
+}
+.hero-chips {
+  display: flex; flex-wrap: wrap; gap: 0.6rem;
+  margin-top: 2rem;
+  animation: fadeSlide 0.7s 0.3s ease both;
+}
+.chip {
+  background: var(--paper2);
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  font-family: 'DM Mono', monospace;
+  font-size: 0.72rem;
+  color: var(--ink2);
+  padding: 0.3rem 0.8rem;
+  letter-spacing: 0.05em;
+}
+.chip.a { border-color: var(--amber); color: var(--amber); }
+.chip.g { border-color: var(--green); color: var(--green); }
+.chip.b { border-color: var(--blue);  color: var(--blue);  }
+.chip.p { border-color: var(--purple);color: var(--purple);}
+.chip.r { border-color: var(--red);   color: var(--red);   }
+
+/* big decorative number */
+.hero-bg-num {
+  position: absolute; right: -0.5rem; bottom: 3rem;
+  font-family: 'Playfair Display', serif;
+  font-size: clamp(10rem,22vw,18rem);
+  font-weight: 900; color: var(--paper2);
+  line-height: 1; pointer-events: none;
+  user-select: none; z-index: 0;
+  animation: fadeSlide 1s 0.4s ease both;
+}
+
+@keyframes fadeSlide {
+  from { opacity:0; transform:translateY(18px); }
+  to   { opacity:1; transform:translateY(0); }
+}
+
+/* ── LAYOUT ── */
+.page { max-width: 1000px; margin: 0 auto; padding: 0 2.5rem; }
+
+/* ── SECTION ── */
+.section {
+  padding: 5rem 0;
+  border-top: 1px solid var(--border);
+}
+.sec-num {
+  font-family: 'DM Mono', monospace;
+  font-size: 0.68rem; letter-spacing: 0.2em;
+  color: var(--ink3); text-transform: uppercase;
+  margin-bottom: 0.5rem;
+}
+.sec-title {
+  font-family: 'Playfair Display', serif;
+  font-size: clamp(1.8rem, 4vw, 2.8rem);
+  font-weight: 700; line-height: 1.15;
+  margin-bottom: 1.5rem;
+  color: var(--ink);
+}
+.sec-title em { font-style: italic; color: var(--amber); }
+.rule { width:48px; height:3px; background:var(--amber); margin:0.5rem 0 1.75rem; }
+
+p { color: var(--ink2); margin-bottom: 1rem; }
+strong { color: var(--ink); }
+
+/* ── INLINE CODE ── */
+code {
+  font-family: 'DM Mono', monospace;
+  font-size: 0.82em;
+  background: var(--paper3);
+  border: 1px solid var(--border);
+  color: #b45f06;
+  padding: 0.08rem 0.38rem;
+  border-radius: 2px;
+}
+
+/* ── INFO BOXES ── */
+.box {
+  background: var(--paper2);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--amber);
+  padding: 1.2rem 1.5rem;
+  margin: 1.5rem 0;
+  border-radius: 0 4px 4px 0;
+}
+.box.green { border-left-color: var(--green); }
+.box.blue  { border-left-color: var(--blue); }
+.box.red   { border-left-color: var(--red); }
+.box.purple{ border-left-color: var(--purple); }
+.box-label {
+  font-family: 'DM Mono', monospace;
+  font-size: 0.68rem; letter-spacing: 0.15em;
+  text-transform: uppercase; margin-bottom: 0.5rem;
+  color: var(--amber);
+}
+.box.green .box-label { color: var(--green); }
+.box.blue  .box-label { color: var(--blue); }
+.box.red   .box-label { color: var(--red); }
+.box.purple .box-label { color: var(--purple); }
+.box p { margin:0; font-size: 0.92rem; }
+
+/* ── TECHNIQUE CARDS ── */
+.tech-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 1px;
+  border: 1px solid var(--border);
+  background: var(--border);
+  margin: 2rem 0;
+  border-radius: 4px;
+  overflow: hidden;
+}
+.tech-card {
+  background: var(--paper);
+  padding: 1.5rem;
+  transition: background 0.2s;
+  cursor: default;
+}
+.tech-card:hover { background: var(--paper2); }
+.tech-card .tc-num {
+  font-family: 'DM Mono', monospace;
+  font-size: 2rem; font-weight: 300;
+  color: var(--paper3); line-height: 1;
+  margin-bottom: 0.75rem;
+}
+.tech-card h3 {
+  font-family: 'Playfair Display', serif;
+  font-size: 1rem; font-weight: 700;
+  margin-bottom: 0.4rem; color: var(--ink);
+}
+.tech-card p { font-size: 0.82rem; margin:0; color: var(--ink2); }
+.tc-tag {
+  display: inline-block;
+  font-family: 'DM Mono', monospace;
+  font-size: 0.65rem;
+  border: 1px solid;
+  padding: 0.1rem 0.4rem;
+  border-radius: 2px;
+  margin-top: 0.6rem;
+}
+.tc-tag.a { color:var(--amber);  border-color:var(--amber); }
+.tc-tag.g { color:var(--green);  border-color:var(--green); }
+.tc-tag.b { color:var(--blue);   border-color:var(--blue);  }
+.tc-tag.p { color:var(--purple); border-color:var(--purple);}
+.tc-tag.r { color:var(--red);    border-color:var(--red);   }
+
+/* ── CODE BLOCKS ── */
+.code-wrap {
+  margin: 2rem 0;
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid var(--code-border);
+}
+.code-head {
+  background: #2a2218;
+  padding: 0.65rem 1.25rem;
+  display: flex; align-items: center;
+  justify-content: space-between;
+}
+.code-dots { display:flex; gap:5px; }
+.code-dots span {
+  width:11px; height:11px;
+  border-radius:50%;
+}
+.code-dots span:nth-child(1){background:#ef4444;}
+.code-dots span:nth-child(2){background:#f59e0b;}
+.code-dots span:nth-child(3){background:#10b981;}
+.code-fname {
+  font-family: 'DM Mono', monospace;
+  font-size: 0.75rem; color: #6b5e45;
+}
+.copy-btn {
+  background: none;
+  border: 1px solid #3a3025;
+  color: #6b5e45;
+  font-family: 'DM Mono', monospace;
+  font-size: 0.68rem;
+  padding: 0.2rem 0.65rem;
+  border-radius: 3px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.copy-btn:hover { border-color:var(--amber2); color:var(--amber2); }
+.copy-btn.ok    { border-color:#10b981; color:#10b981; }
+
+pre {
+  background: var(--code-bg);
+  padding: 1.5rem;
+  overflow-x: auto;
+  font-family: 'DM Mono', monospace;
+  font-size: 0.8rem;
+  line-height: 1.8;
+  tab-size: 2;
+  color: #e7e5e4;
+}
+
+/* syntax highlighting inside pre */
+pre .kw { color:#f97316; }
+pre .ty { color:#60a5fa; }
+pre .fn { color:#a78bfa; }
+pre .nu { color:#fb923c; }
+pre .cm { color:#a3a3a3; font-style:italic; }
+pre .st { color:#86efac; }
+pre .va { color:#e7e5e4; }
+pre .sc { color:#4ade80; }
+pre .op { color:#f97316; }
+
+/* fallback for inline code inside pre (remove weird bg) */
+pre code {
+  background: transparent;
+  border: none;
+  color: inherit;
+  padding: 0;
+}
+
+/* ── COMPARISON TABLE ── */
+table {
+  width:100%; border-collapse:collapse;
+  margin: 1.5rem 0; font-size: 0.875rem;
+}
+thead tr { border-bottom: 2px solid var(--ink); }
+th {
+  font-family: 'DM Mono', monospace;
+  font-size: 0.68rem; letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink); padding: 0.65rem 1rem;
+  text-align: left;
+}
+td {
+  padding: 0.6rem 1rem;
+  border-bottom: 1px solid var(--border);
+  color: var(--ink2); vertical-align: top;
+}
+tr:hover td { background: var(--paper2); }
+td code { font-size: 0.78em; }
+.badge-yes {
+  display:inline-block; background:var(--green);
+  color:#fff; font-size:0.7rem; font-family:'DM Mono',monospace;
+  padding:0.1rem 0.4rem; border-radius:2px;
+}
+.badge-no {
+  display:inline-block; background:var(--red);
+  color:#fff; font-size:0.7rem; font-family:'DM Mono',monospace;
+  padding:0.1rem 0.4rem; border-radius:2px;
+}
+
+/* ── STEPS ── */
+.steps { list-style:none; margin:1.5rem 0; }
+.steps li {
+  display:flex; gap:1.25rem; margin-bottom:1.25rem;
+  align-items:flex-start;
+}
+.step-num {
+  font-family:'Playfair Display',serif;
+  font-size:1.5rem; font-weight:700;
+  color:var(--paper3); line-height:1;
+  min-width:36px; padding-top:0.1rem;
+}
+.step-body strong {
+  display:block; font-family:'DM Sans',sans-serif;
+  font-size:0.95rem; margin-bottom:0.25rem;
+  color: var(--ink);
+}
+.step-body p { margin:0; font-size:0.88rem; color: var(--ink2); }
+
+/* ── COMPLEXITY ROW ── */
+.cx-row {
+  display:grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px,1fr));
+  gap:1px; background:var(--border);
+  border:1px solid var(--border);
+  border-radius:4px; overflow:hidden;
+  margin:1.5rem 0;
+}
+.cx-item {
+  background:var(--paper);
+  padding:1.25rem; text-align:center;
+}
+.cx-item .cx-val {
+  font-family:'Playfair Display',serif;
+  font-size:1.4rem; font-weight:700;
+  color:var(--amber); display:block;
+  margin-bottom:0.25rem;
+}
+.cx-item .cx-label {
+  font-family:'DM Mono',monospace;
+  font-size:0.7rem; color:var(--ink3);
+  text-transform:uppercase; letter-spacing:0.1em;
+}
+
+/* ── SVG DIAGRAM ── */
+.diag-wrap {
+  background: var(--paper2);
+  border: 1px solid var(--border);
+  border-radius:6px; padding:1.75rem;
+  margin:2rem 0; overflow-x:auto;
+}
+.diag-wrap h4 {
+  font-family:'DM Mono',monospace;
+  font-size:0.72rem; color:var(--ink3);
+  text-transform:uppercase; letter-spacing:0.12em;
+  margin-bottom:1.25rem;
+}
+
+/* ── APP LIST ── */
+.app-grid {
+  display:grid;
+  grid-template-columns: repeat(auto-fill, minmax(210px,1fr));
+  gap:0.75rem; margin:1.5rem 0;
+}
+.app-it {
+  background:var(--paper2);
+  border:1px solid var(--border);
+  border-radius:4px; padding:0.75rem 1rem;
+  font-size:0.82rem; color:var(--ink2);
+  display:flex; align-items:center; gap:0.6rem;
+  transition:all 0.2s; cursor:default;
+}
+.app-it:hover { border-color:var(--amber); color:var(--ink); }
+.app-it .ic { font-size:1rem; }
+
+/* ── PULLQUOTE ── */
+.pullquote {
+  border-left: 4px solid var(--amber);
+  padding: 0.5rem 1.5rem;
+  margin: 2rem 0;
+  position: relative;
+}
+.pullquote p {
+  font-family:'Playfair Display',serif;
+  font-size:1.2rem; font-style:italic;
+  color:var(--ink); margin:0; line-height:1.5;
+}
+.pullquote cite {
+  display:block; font-family:'DM Mono',monospace;
+  font-size:0.72rem; color:var(--ink3);
+  margin-top:0.5rem; letter-spacing:0.1em;
+}
+
+/* ── FOOTER ── */
+footer {
+  border-top:2px solid var(--ink);
+  padding:3rem 0;
+  text-align:center;
+}
+footer p {
+  font-family:'DM Mono',monospace;
+  font-size:0.75rem; color:var(--ink3);
+  margin:0;
+}
+footer span { color:var(--amber); }
+
+/* ── SECTION TABS (active highlight in nav) ── */
+.section { position: relative; }
+
+/* fix some inline text contrast */
+a, .chip, .nav-links a, .box-label, .sec-num, .tc-tag {
+  color-adjust: exact;
+}
+</style>
+</head>
+<body>
+
+<nav>
+  <span class="nav-logo">Offline Queries</span>
+  <div class="nav-links">
+    <a href="#intro">Intro</a>
+    <a href="#mo">Mo's</a>
+    <a href="#cdq">CDQ</a>
+    <a href="#pbs">Parallel BS</a>
+    <a href="#dsu">DSU on Tree</a>
+    <a href="#compare">So sánh</a>
+  </div>
+</nav>
+
+<!-- ═══ HERO ═══ -->
+<div style="max-width:1100px;margin:0 auto;padding:0 2.5rem;position:relative;overflow:hidden;">
+  <section class="hero" style="padding-left:0;padding-right:0;">
+    <div class="hero-rule"></div>
+    <div class="hero-eyebrow">// Competitive Programming · Advanced Techniques</div>
+    <h1>Offline<br><em>Queries</em></h1>
+    <p class="hero-desc">
+      Khi không cần trả lời truy vấn ngay lập tức — hãy <strong>gom chúng lại, sắp xếp, và xử lý theo thứ tự thông minh</strong>. Đó là bản chất của Offline Queries.
+    </p>
+    <div class="hero-chips">
+      <span class="chip a">Mo's Algorithm</span>
+      <span class="chip g">CDQ D&amp;C</span>
+      <span class="chip b">Parallel Binary Search</span>
+      <span class="chip p">DSU on Tree</span>
+      <span class="chip r">Offline BIT</span>
+    </div>
+    <div class="hero-bg-num" aria-hidden="true">Q</div>
+  </section>
+</div>
+
+<!-- ═══ SECTION 1: INTRO ═══ -->
+<section class="section" id="intro">
+  <div class="page">
+    <div class="sec-num">01 — Nền tảng</div>
+    <h2 class="sec-title">Online vs <em>Offline</em></h2>
+    <div class="rule"></div>
+
+    <p>Trong lập trình thi đấu, truy vấn chia làm hai loại dựa trên <strong>thời điểm phải trả lời</strong>:</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Tiêu chí</th>
+          <th>Online Query</th>
+          <th>Offline Query</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Thời điểm trả lời</td>
+          <td>Ngay khi nhận query</td>
+          <td>Sau khi đọc <em>tất cả</em> query</td>
+        </tr>
+        <tr>
+          <td>Query sau phụ thuộc query trước</td>
+          <td><span class="badge-yes">CÓ THỂ</span></td>
+          <td><span class="badge-no">KHÔNG</span></td>
+        </tr>
+        <tr>
+          <td>Tự do sắp xếp lại query</td>
+          <td><span class="badge-no">KHÔNG</span></td>
+          <td><span class="badge-yes">CÓ</span></td>
+        </tr>
+        <tr>
+          <td>Ví dụ cấu trúc</td>
+          <td>Segment Tree, BIT, Hash Map</td>
+          <td>Mo's, CDQ, Parallel BS, DSU on Tree</td>
+        </tr>
+        <tr>
+          <td>Độ phức tạp điển hình</td>
+          <td><code>O(n log n)</code> — <code>O(n√n)</code></td>
+          <td>Thường <strong>tốt hơn hoặc dễ cài hơn</strong></td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="pullquote">
+      <p>"Offline = tự do sắp xếp. Đây là siêu năng lực mà nhiều người bỏ quên."</p>
+      <cite>— Nguyên lý cốt lõi</cite>
+    </div>
+
+    <div class="tech-grid">
+      <div class="tech-card">
+        <div class="tc-num">01</div>
+        <h3>Mo's Algorithm</h3>
+        <p>Sắp xếp query theo thứ tự √n để dịch chuyển con trỏ [l,r] tối thiểu.</p>
+        <span class="tc-tag a">O(n√n)</span>
+      </div>
+      <div class="tech-card">
+        <div class="tc-num">02</div>
+        <h3>CDQ Divide &amp; Conquer</h3>
+        <p>Chia đôi, giải quyết ảnh hưởng trái→phải, gộp lại. Thay thế CDST online.</p>
+        <span class="tc-tag g">O(n log²n)</span>
+      </div>
+      <div class="tech-card">
+        <div class="tc-num">03</div>
+        <h3>Parallel Binary Search</h3>
+        <p>Chạy binary search cho n query đồng thời, giảm từ O(n log n) log xuống.</p>
+        <span class="tc-tag b">O(n log²n)</span>
+      </div>
+      <div class="tech-card">
+        <div class="tc-num">04</div>
+        <h3>DSU on Tree</h3>
+        <p>DFS + Small-to-Large merge. Giải bài tổng hợp trên cây trong O(n log n).</p>
+        <span class="tc-tag p">O(n log n)</span>
+      </div>
+      <div class="tech-card">
+        <div class="tc-num">05</div>
+        <h3>Offline BIT / Sweep</h3>
+        <p>Gắn query vào điểm thời gian, sweep qua mảng và trả lời lazy.</p>
+        <span class="tc-tag r">O(n log n)</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ SECTION 2: MO'S ═══ -->
+<section class="section" id="mo">
+  <div class="page">
+    <div class="sec-num">02 — Kỹ thuật 1</div>
+    <h2 class="sec-title">Mo's <em>Algorithm</em></h2>
+    <div class="rule"></div>
+
+    <p>
+      Mo's Algorithm là kỹ thuật xử lý offline các truy vấn đoạn <code>[l, r]</code> bằng cách <strong>sắp xếp query theo thứ tự đặc biệt</strong> để tổng số bước dịch chuyển con trỏ là <code>O((n + q)√n)</code>.
+    </p>
+
+    <div class="cx-row">
+      <div class="cx-item"><span class="cx-val">O(n√n)</span><span class="cx-label">Tổng thời gian</span></div>
+      <div class="cx-item"><span class="cx-val">O(√n)</span><span class="cx-label">Block size</span></div>
+      <div class="cx-item"><span class="cx-val">O(q log q)</span><span class="cx-label">Sắp xếp query</span></div>
+      <div class="cx-item"><span class="cx-val">O(1)</span><span class="cx-label">Add / Remove</span></div>
+    </div>
+
+    <h3 style="font-family:'Playfair Display',serif;font-size:1.1rem;margin:1.5rem 0 0.75rem;">Nguyên lý sắp xếp query</h3>
+
+    <!-- diagram: Mo blocks (giữ nguyên SVG) -->
+    <div class="diag-wrap">
+      <h4>Mo's blocks — Mảng chia thành khối √n, query sắp theo block(l), rồi theo r</h4>
+      <svg viewBox="0 0 720 200" width="100%" xmlns="http://www.w3.org/2000/svg">
+        <rect x="20"  y="20" width="160" height="40" fill="#fef3e2" stroke="#c8820a" stroke-width="1.5" rx="2"/>
+        <rect x="200" y="20" width="160" height="40" fill="#e8f4e8" stroke="#2d6a4f" stroke-width="1.5" rx="2"/>
+        <rect x="380" y="20" width="160" height="40" fill="#e8f0f8" stroke="#1a4971" stroke-width="1.5" rx="2"/>
+        <rect x="560" y="20" width="140" height="40" fill="#f3ebfa" stroke="#6b2fa0" stroke-width="1.5" rx="2"/>
+        <text x="100" y="45" text-anchor="middle" font-size="11" fill="#c8820a" font-family="'DM Mono',monospace">Block 0 [0, √n)</text>
+        <text x="280" y="45" text-anchor="middle" font-size="11" fill="#2d6a4f" font-family="'DM Mono',monospace">Block 1 [√n, 2√n)</text>
+        <text x="460" y="45" text-anchor="middle" font-size="11" fill="#1a4971" font-family="'DM Mono',monospace">Block 2 [2√n,3√n)</text>
+        <text x="630" y="45" text-anchor="middle" font-size="11" fill="#6b2fa0" font-family="'DM Mono',monospace">Block 3 ...</text>
+        <text x="30" y="105" font-size="10" fill="#4a3f2f" font-family="'DM Mono',monospace">Queries trong block 0:</text>
+        <line x1="30" y1="125" x2="170" y2="125" stroke="#c8820a" stroke-width="1" stroke-dasharray="3,2"/>
+        <circle cx="50"  cy="125" r="4" fill="#c8820a"/>
+        <circle cx="100" cy="125" r="4" fill="#c8820a"/>
+        <circle cx="140" cy="125" r="4" fill="#c8820a"/>
+        <path d="M50,118 L50,112 L100,112 L100,118" fill="none" stroke="#c8820a" stroke-width="1.2"/>
+        <path d="M100,118 L100,112 L140,112 L140,118" fill="none" stroke="#c8820a" stroke-width="1.2"/>
+        <text x="70"  y="108" text-anchor="middle" font-size="9" fill="#c8820a" font-family="'DM Mono',monospace">q1</text>
+        <text x="120" y="108" text-anchor="middle" font-size="9" fill="#c8820a" font-family="'DM Mono',monospace">q2</text>
+        <text x="30"  y="148" font-size="9" fill="#4a3f2f" font-family="'DM Mono',monospace">r tăng đơn điệu ↗</text>
+        <text x="210" y="105" font-size="10" fill="#4a3f2f" font-family="'DM Mono',monospace">Queries trong block 1:</text>
+        <line x1="210" y1="125" x2="350" y2="125" stroke="#2d6a4f" stroke-width="1" stroke-dasharray="3,2"/>
+        <circle cx="230"  cy="125" r="4" fill="#2d6a4f"/>
+        <circle cx="290" cy="125" r="4" fill="#2d6a4f"/>
+        <circle cx="340" cy="125" r="4" fill="#2d6a4f"/>
+        <path d="M340,118 L340,112 L290,112 L290,118" fill="none" stroke="#2d6a4f" stroke-width="1.2"/>
+        <path d="M290,118 L290,112 L230,112 L230,118" fill="none" stroke="#2d6a4f" stroke-width="1.2"/>
+        <text x="315" y="108" text-anchor="middle" font-size="9" fill="#2d6a4f" font-family="'DM Mono',monospace">q3</text>
+        <text x="260" y="108" text-anchor="middle" font-size="9" fill="#2d6a4f" font-family="'DM Mono',monospace">q4</text>
+        <text x="210" y="148" font-size="9" fill="#4a3f2f" font-family="'DM Mono',monospace">r giảm đơn điệu ↘ (block lẻ)</text>
+        <text x="400" y="115" font-size="9" fill="#4a3f2f" font-family="'DM Mono',monospace">⟵ Hilbert curve</text>
+        <text x="400" y="130" font-size="9" fill="#4a3f2f" font-family="'DM Mono',monospace">   ordering (tối ưu)</text>
+        <text x="20" y="185" font-size="9" fill="#4a3f2f" font-family="'DM Mono',monospace">Mỗi block: r di chuyển O(n) lần  |  Có √n block  |  Tổng: O(n√n)</text>
+      </svg>
+    </div>
+
+    <ul class="steps">
+      <li><span class="step-num">1</span><div class="step-body"><strong>Chọn block size B = √n</strong><p>Chia mảng thành các khối kích thước B. Block của index <code>i</code> là <code>i / B</code>.</p></div></li>
+      <li><span class="step-num">2</span><div class="step-body"><strong>Sắp xếp query</strong><p>Sắp theo <code>(block[l], r)</code> — nếu block[l] bằng nhau: block lẻ thì r giảm, block chẵn thì r tăng (Mo tối ưu).</p></div></li>
+      <li><span class="step-num">3</span><div class="step-body"><strong>Duy trì cửa sổ [curL, curR]</strong><p>Với mỗi query, dịch chuyển curL/curR bằng cách gọi <code>add(x)</code> hoặc <code>remove(x)</code> từng bước.</p></div></li>
+      <li><span class="step-num">4</span><div class="step-body"><strong>Trả lời query theo thứ tự gốc</strong><p>Lưu đáp án vào <code>ans[idx]</code> rồi xuất theo thứ tự ban đầu.</p></div></li>
+    </ul>
+
+    <div class="code-wrap">
+      <div class="code-head"><div class="code-dots"><span></span><span></span><span></span></div><span class="code-fname">mo_algorithm.cpp</span><button class="copy-btn" onclick="copyCode(this)">copy</button></div>
+      <pre><span class="cm">// ══════════════════════════════════════════════
+//  Mo's Algorithm — Đếm số phần tử phân biệt
+//  O((n + q) * sqrt(n))
+// ══════════════════════════════════════════════</span>
+<span class="kw">#include</span> <span class="st">&lt;bits/stdc++.h&gt;</span>
+<span class="kw">using namespace</span> std;
+
+<span class="kw">const int</span> MAXN = <span class="nu">1e5</span> + <span class="nu">5</span>;
+<span class="ty">int</span> a[MAXN], cnt[MAXN];
+<span class="ty">int</span> ans[MAXN];
+<span class="ty">int</span> n, q, B;
+<span class="ty">int</span> curAns = <span class="nu">0</span>;
+
+<span class="kw">struct</span> <span class="sc">Query</span> {
+    <span class="ty">int</span> l, r, idx;
+};
+
+<span class="kw">void</span> <span class="fn">add</span>(<span class="ty">int</span> x) {
+    <span class="kw">if</span> (++cnt[a[x]] == <span class="nu">1</span>) ++curAns;
+}
+
+<span class="kw">void</span> <span class="fn">remove</span>(<span class="ty">int</span> x) {
+    <span class="kw">if</span> (--cnt[a[x]] == <span class="nu">0</span>) --curAns;
+}
+
+<span class="ty">int</span> <span class="fn">main</span>() {
+    ios::sync_with_stdio(<span class="kw">false</span>);
+    cin.tie(<span class="kw">nullptr</span>);
+    cin >> n >> q;
+    B = max(<span class="nu">1</span>, (<span class="ty">int</span>)<span class="fn">sqrt</span>(n));
+    <span class="kw">for</span> (<span class="ty">int</span> i = <span class="nu">0</span>; i < n; i++) cin >> a[i];
+    vector&lt;<span class="sc">Query</span>&gt; queries(q);
+    <span class="kw">for</span> (<span class="ty">int</span> i = <span class="nu">0</span>; i < q; i++)
+        cin >> queries[i].l >> queries[i].r,
+        queries[i].l--, queries[i].r--,
+        queries[i].idx = i;
+    <span class="fn">sort</span>(queries.<span class="fn">begin</span>(), queries.<span class="fn">end</span>(),
+        [](<span class="kw">const</span> <span class="sc">Query</span>&amp; a, <span class="kw">const</span> <span class="sc">Query</span>&amp; b) {
+            <span class="ty">int</span> ba = a.l / B, bb = b.l / B;
+            <span class="kw">if</span> (ba != bb) <span class="kw">return</span> ba < bb;
+            <span class="kw">return</span> (ba &amp; <span class="nu">1</span>) ? a.r > b.r : a.r < b.r;
+        });
+    <span class="ty">int</span> curL = <span class="nu">0</span>, curR = -<span class="nu">1</span>;
+    <span class="kw">for</span> (<span class="kw">auto</span>&amp; qr : queries) {
+        <span class="kw">while</span> (curR < qr.r) <span class="fn">add</span>(++curR);
+        <span class="kw">while</span> (curL > qr.l) <span class="fn">add</span>(--curL);
+        <span class="kw">while</span> (curR > qr.r) <span class="fn">remove</span>(curR--);
+        <span class="kw">while</span> (curL < qr.l) <span class="fn">remove</span>(curL++);
+        ans[qr.idx] = curAns;
+    }
+    <span class="kw">for</span> (<span class="ty">int</span> i = <span class="nu">0</span>; i < q; i++) cout << ans[i] << <span class="st">'\n'</span>;
+}</pre>
+    </div>
+    <div class="box"><div class="box-label">💡 Mo's với Update (Mo 3D)</div><p>Khi có cả update + query: thêm chiều thứ 3 là thời gian (timestamp). Sắp xếp theo <code>(block[l], block[r], t)</code>. Độ phức tạp <code>O(n^(5/3))</code>.</p></div>
+  </div>
+</section>
+
+<!-- ═══ SECTION 3: CDQ ═══ -->
+<section class="section" id="cdq"><div class="page"><div class="sec-num">03 — Kỹ thuật 2</div><h2 class="sec-title">CDQ Divide <em>&amp; Conquer</em></h2><div class="rule"></div><p>CDQ (陈丹琦 — tên tác giả) là kỹ thuật <strong>chia đôi tập thao tác</strong> theo thời gian, rồi tính ảnh hưởng của nửa trái lên nửa phải bằng merge sort hoặc BIT. Thay thế các cấu trúc dữ liệu online phức tạp (Balanced BST, 2D Segment Tree).</p><div class="box green"><div class="box-label">🎯 Bài toán điển hình</div><p><strong>3D partial order / Count inversions</strong>: Cho n điểm (a, b, c), đếm số cặp (i,j) sao cho a[i]≤a[j], b[i]≤b[j], c[i]≤c[j]. CDQ giải trong <code>O(n log²n)</code>.</p></div><div class="code-wrap"><div class="code-head"><div class="code-dots"><span></span><span></span><span></span></div><span class="code-fname">cdq_3d_partial_order.cpp</span><button class="copy-btn" onclick="copyCode(this)">copy</button></div><pre><span class="cm">// CDQ Divide & Conquer — 3D Partial Order</span>
+<span class="kw">#include</span> <span class="st">&lt;bits/stdc++.h&gt;</span>
+<span class="kw">using namespace</span> std;
+<span class="kw">struct</span> <span class="sc">Point</span> { <span class="ty">int</span> a, b, c, ans, id; };
+<span class="ty">int</span> bit[<span class="nu">100005</span>], maxC;
+<span class="kw">void</span> <span class="fn">upd</span>(<span class="ty">int</span> x, <span class="ty">int</span> v) { <span class="kw">for</span> (; x<=maxC; x+=x&-x) bit[x]+=v; }
+<span class="ty">int</span>  <span class="fn">qry</span>(<span class="ty">int</span> x) { <span class="ty">int</span> s=<span class="nu">0</span>; <span class="kw">for</span>(; x>0; x-=x&-x) s+=bit[x]; <span class="kw">return</span> s; }
+<span class="kw">void</span> <span class="fn">cdq</span>(vector&lt;<span class="sc">Point</span>&gt;&amp; pts, <span class="ty">int</span> l, <span class="ty">int</span> r) {
+    <span class="kw">if</span> (l >= r) <span class="kw">return</span>;
+    <span class="ty">int</span> mid = (l+r)>><span class="nu">1</span>;
+    <span class="fn">cdq</span>(pts, l, mid); <span class="fn">cdq</span>(pts, mid+<span class="nu">1</span>, r);
+    <span class="ty">int</span> i=l, j=mid+<span class="nu">1</span>;
+    vector&lt;<span class="ty">int</span>&gt; toClean;
+    <span class="kw">while</span> (i<=mid || j<=r) {
+        <span class="kw">if</span> (j>r || (i<=mid && pts[i].b <= pts[j].b)) {
+            <span class="fn">upd</span>(pts[i].c, <span class="nu">1</span>); toClean.<span class="fn">push_back</span>(pts[i].c); i++;
+        } <span class="kw">else</span> { pts[j].ans += <span class="fn">qry</span>(pts[j].c); j++; }
+    }
+    <span class="kw">for</span> (<span class="ty">int</span> x : toClean) <span class="fn">upd</span>(x, -<span class="nu">1</span>);
+    <span class="fn">inplace_merge</span>(pts.<span class="fn">begin</span>()+l, pts.<span class="fn">begin</span>()+mid+<span class="nu">1</span>, pts.<span class="fn">begin</span>()+r+<span class="nu">1</span>,
+        [](<span class="kw">const</span> <span class="sc">Point</span>&amp; x, <span class="kw">const</span> <span class="sc">Point</span>&amp; y){ <span class="kw">return</span> x.b < y.b; });
+}</pre></div><div class="box blue"><div class="box-label">📌 CDQ cho Dynamic Problems</div><p>CDQ cũng xử lý bài "có update + query online" thành offline.</p></div></div></section>
+
+<!-- ═══ SECTION 4: PARALLEL BINARY SEARCH ═══ -->
+<section class="section" id="pbs"><div class="page"><div class="sec-num">04 — Kỹ thuật 3</div><h2 class="sec-title">Parallel <em>Binary Search</em></h2><div class="rule"></div><p>Khi có <strong>q query độc lập, mỗi query cần binary search trên cùng một dãy sự kiện</strong>, PBS gom tất cả binary search lại và xử lý đồng thời.</p><div class="code-wrap"><div class="code-head"><div class="code-dots"><span></span><span></span><span></span></div><span class="code-fname">parallel_binary_search.cpp</span><button class="copy-btn" onclick="copyCode(this)">copy</button></div><pre><span class="cm">// Parallel Binary Search - O((n+q) log^2 n)</span>
+<span class="kw">#include</span> <span class="st">&lt;bits/stdc++.h&gt;</span>
+<span class="kw">using namespace</span> std;
+<span class="kw">const int</span> MAXN = <span class="nu">1e5</span>+<span class="nu">5</span>;
+<span class="ty">int</span> bit[MAXN], n, q;
+<span class="kw">void</span> <span class="fn">upd</span>(<span class="ty">int</span> x) { <span class="kw">for</span>(; x<=n; x+=x&-x) bit[x]++; }
+<span class="ty">int</span>  <span class="fn">qry</span>(<span class="ty">int</span> x) { <span class="ty">int</span> s=<span class="nu">0</span>; <span class="kw">for</span>(; x>0; x-=x&-x) s+=bit[x]; <span class="kw">return</span> s; }
+<span class="ty">int</span> <span class="fn">main</span>() {
+    cin >> n >> q;
+    vector&lt;<span class="ty">int</span>&gt; events(n+<span class="nu">1</span>);
+    <span class="kw">for</span> (<span class="ty">int</span> t=<span class="nu">1</span>; t<=n; t++) cin >> events[t];
+    vector&lt;<span class="ty">int</span>&gt; ql(q), qr(q), k(q), ans(q,-<span class="nu">1</span>), lo(q,<span class="nu">0</span>), hi(q,n);
+    <span class="kw">for</span> (<span class="ty">int</span> i=<span class="nu">0</span>; i<q; i++) cin >> ql[i] >> qr[i] >> k[i];
+    <span class="kw">for</span> (<span class="ty">int</span> iter=<span class="nu">0</span>; iter<<span class="nu">20</span>; iter++) {
+        vector&lt;vector&lt;<span class="ty">int</span>&gt;&gt; check(n+<span class="nu">2</span>);
+        <span class="ty">bool</span> done=<span class="kw">true</span>;
+        <span class="kw">for</span> (<span class="ty">int</span> i=<span class="nu">0</span>; i<q; i++) <span class="kw">if</span> (lo[i] < hi[i]) {
+            done=<span class="kw">false</span>;
+            check[(lo[i]+hi[i])/<span class="nu">2</span>].<span class="fn">push_back</span>(i);
+        }
+        <span class="kw">if</span> (done) <span class="kw">break</span>;
+        fill(bit, bit+n+<span class="nu">2</span>, <span class="nu">0</span>);
+        <span class="kw">for</span> (<span class="ty">int</span> t=<span class="nu">1</span>; t<=n; t++) {
+            <span class="fn">upd</span>(events[t]);
+            <span class="kw">for</span> (<span class="ty">int</span> i : check[t]) {
+                <span class="kw">if</span> (<span class="fn">qry</span>(qr[i]) - <span class="fn">qry</span>(ql[i]-<span class="nu">1</span>) >= k[i]) hi[i]=t;
+                <span class="kw">else</span> lo[i]=t+<span class="nu">1</span>;
+            }
+        }
+    }
+    <span class="kw">for</span> (<span class="ty">int</span> i=<span class="nu">0</span>; i<q; i++) cout << (lo[i]<=n?lo[i]:-<span class="nu">1</span>) << <span class="st">'\n'</span>;
+}</pre></div></div></section>
+
+<!-- ═══ SECTION 5: DSU ON TREE ═══ -->
+<section class="section" id="dsu"><div class="page"><div class="sec-num">05 — Kỹ thuật 4</div><h2 class="sec-title">DSU <em>on Tree</em></h2><div class="rule"></div><p>DSU on Tree (Small to Large) là kỹ thuật DFS giữ lại thông tin con nặng nhất, xóa nhẹ, đạt <code>O(n log n)</code>.</p><div class="code-wrap"><div class="code-head"><div class="code-dots"><span></span><span></span><span></span></div><span class="code-fname">dsu_on_tree.cpp</span><button class="copy-btn" onclick="copyCode(this)">copy</button></div><pre><span class="cm">// DSU on Tree — Đếm màu phân biệt subtree</span>
+<span class="kw">#include</span> <span class="st">&lt;bits/stdc++.h&gt;</span>
+<span class="kw">using namespace</span> std;
+<span class="kw">const int</span> MAXN = <span class="nu">1e5</span>+<span class="nu">5</span>;
+vector&lt;<span class="ty">int</span>&gt; adj[MAXN];
+<span class="ty">int</span> col[MAXN], sz[MAXN], heavy[MAXN], cnt[MAXN], ans[MAXN], curAns;
+<span class="kw">void</span> <span class="fn">dfs_sz</span>(<span class="ty">int</span> u, <span class="ty">int</span> p) {
+    sz[u]=<span class="nu">1</span>; heavy[u]=-<span class="nu">1</span>;
+    <span class="kw">for</span> (<span class="ty">int</span> v: adj[u]) <span class="kw">if</span>(v!=p) {
+        <span class="fn">dfs_sz</span>(v,u); sz[u]+=sz[v];
+        <span class="kw">if</span>(heavy[u]==-<span class="nu">1</span> || sz[v] > sz[heavy[u]]) heavy[u]=v;
+    }
+}
+<span class="kw">void</span> <span class="fn">add</span>(<span class="ty">int</span> u, <span class="ty">int</span> p, <span class="ty">int</span> x) {
+    <span class="kw">if</span>(++cnt[col[u]]==<span class="nu">1</span>) curAns++;
+    <span class="kw">for</span>(<span class="ty">int</span> v: adj[u]) <span class="kw">if</span>(v!=p && v!=x) <span class="fn">add</span>(v,u,x);
+}
+<span class="kw">void</span> <span class="fn">clear</span>(<span class="ty">int</span> u, <span class="ty">int</span> p) { cnt[col[u]]=<span class="nu">0</span>; <span class="kw">for</span>(<span class="ty">int</span> v: adj[u]) <span class="kw">if</span>(v!=p) <span class="fn">clear</span>(v,u); }
+<span class="kw">void</span> <span class="fn">dfs</span>(<span class="ty">int</span> u, <span class="ty">int</span> p, <span class="ty">bool</span> keep) {
+    <span class="kw">for</span>(<span class="ty">int</span> v: adj[u]) <span class="kw">if</span>(v!=p && v!=heavy[u]) <span class="fn">dfs</span>(v,u,<span class="kw">false</span>);
+    <span class="kw">if</span>(heavy[u]!=-<span class="nu">1</span>) <span class="fn">dfs</span>(heavy[u],u,<span class="kw">true</span>);
+    <span class="fn">add</span>(u,p,heavy[u]); ans[u]=curAns;
+    <span class="kw">if</span>(!keep) { <span class="fn">clear</span>(u,p); curAns=<span class="nu">0</span>; }
+}</pre></div></div></section>
+
+<!-- ═══ SECTION 6: COMPARISON ═══ -->
+<section class="section" id="compare"><div class="page"><div class="sec-num">06 — So sánh &amp; Chọn lựa</div><h2 class="sec-title">Khi nào dùng <em>kỹ thuật nào</em>?</h2><div class="rule"></div><table><thead><tr><th>Kỹ thuật</th><th>Bài toán phù hợp</th><th>Độ phức tạp</th><th>Hạn chế</th></tr></thead><tbody><tr><td><strong>Mo's Algorithm</strong></td><td>Query đoạn [l,r], add/remove O(1)</td><td><code>O(n√n)</code></td><td>Không có update</td></tr><tr><td><strong>CDQ D&amp;C</strong></td><td>Update + query, partial order</td><td><code>O(n log²n)</code></td><td>Code phức tạp</td></tr><tr><td><strong>Parallel BS</strong></td><td>q query binary search trên sự kiện</td><td><code>O(n log²n)</code></td><td>Cần check đơn điệu</td></tr><tr><td><strong>DSU on Tree</strong></td><td>Tổng hợp subtree</td><td><code>O(n log n)</code></td><td>Chỉ trên cây</td></tr></tbody></table><div class="box green"><div class="box-label">✅ Checklist chọn kỹ thuật</div><p><strong>Bài trên đoạn, không update, add/remove O(1)?</strong> → Mo's.<br><strong>Bài 2D/3D partial order, có update và query?</strong> → CDQ.<br><strong>Nhiều query cùng binary search một trục?</strong> → PBS.<br><strong>Bài tổng hợp trên subtree, không update?</strong> → DSU on Tree.</p></div></div></section>
+
+<footer><div class="page"><p><span>Offline Queries</span> · Mo's · CDQ · Parallel BS · DSU on Tree · C++</p></div></footer>
+
+<script>
+function copyCode(btn) {
+  const pre = btn.closest('.code-wrap').querySelector('pre');
+  navigator.clipboard.writeText(pre.innerText || pre.textContent).then(() => {
+    btn.textContent = '✓ copied';
+    btn.classList.add('ok');
+    setTimeout(() => { btn.textContent = 'copy'; btn.classList.remove('ok'); }, 2200);
+  });
+}
+
+const io = new IntersectionObserver(entries => {
+  entries.forEach(e => {
+    if (e.isIntersecting) {
+      e.target.style.opacity = '1';
+      e.target.style.transform = 'translateY(0)';
+    }
+  });
+}, { threshold: 0.08 });
+
+const targets = '.tech-card, .box, .code-wrap, tr, .app-it, .steps li, .cx-item, .diag-wrap, .pullquote';
+document.querySelectorAll(targets).forEach(el => {
+  el.style.opacity = '0';
+  el.style.transform = 'translateY(14px)';
+  el.style.transition = 'opacity 0.45s ease, transform 0.45s ease';
+  io.observe(el);
+});
+</script>
+</body>
+</html>
